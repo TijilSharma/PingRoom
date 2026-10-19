@@ -43,14 +43,14 @@ def table(headers,rows,widths=None):
 
 doc.add_heading('PingRoom Final Implementation Review',0)
 p('MERN real time chat application')
-p('Prepared by Tijil Sharma\nDatabase Systems project\nFinal demonstration 20 October 2026')
+p('Prepared by Tijil Sharma, Riya Chopra and Vidhanshu Bhardwaj\nDatabase Systems project\nFinal demonstration 20 October 2026')
 h('Abstract')
-p('PingRoom implements persistent direct and group messaging with MongoDB, Express, React and Node.js. The database separates shared users, bounded conversation membership and unbounded message history into three collections. Transactions keep messages and cached previews consistent. Compound indexes support ordered history, while aggregation produces unread counts and database insights.')
-p('The final implementation includes authenticated CRUD operations, real time events, per-recipient receipts, text search, cursor pagination and attachment links. Local verification completed with 13 API and database tests and 4 browser tests passing. The production React build and formatting checks also passed. This report maps the earlier reviews to the executable implementation and states the remaining production limitations.')
+p('PingRoom lets users send direct and group messages and return to their conversation history later. We use MongoDB for storage, Express and Node.js for the server, and React for the interface. Users, conversations and messages have separate collections. Each conversation stores its participants and a preview of the latest message. When a message changes, a transaction keeps that preview consistent with the message record.')
+p('The application supports account management, text messages, attachment links, search and paginated history. Socket.IO handles live events, including typing and presence. The local test run passed 13 API and database tests and 4 browser tests. The React build and source formatting checks passed too. We have not measured the latency target proposed in Review 1.')
 h('Final submission')
 table(['Deliverable','Location'],[['Application and source','github.com/TijilSharma/PingRoom'],['Final report','output/PingRoom_Final_Review.pdf and .docx'],['Pitch presentation','output/PingRoom_Final_Pitch.pptx'],['Code explanation and demo','docs/CODE_WALKTHROUGH.md and docs/DEMO.md'],['Reproducible verification','tests/api.test.js, tests/browser/chat.spec.js and GitHub Actions']])
 h('Review basis')
-p('Review 1 defined the problem, functional requirements and MongoDB design. Review 2 documented the database implementation and a 138-document seed. This final review uses those documents as project context and validates claims against the current code and executed checks. Earlier design targets are not treated as measured results.')
+p('In Review 1, we set out the requirements and collection design. Review 2 covered the database implementation and the seed dataset of 138 documents. This submission describes the current code, the checks that passed, and the limits of the local setup.')
 
 page('1 Requirements and final scope')
 table(['Requirement','Final implementation and evidence'],[
@@ -64,9 +64,9 @@ table(['Requirement','Final implementation and evidence'],[
 ['FR 8 Attachments','Validated HTTP(S) image/file links with display name. Binary upload and object storage are outside this implementation.'],
 ['FR 9 Recent conversations','Conversation list sorted by updatedAt with cached lastMessage and aggregated unread counts.']])
 h('Nonfunctional results')
-p('The responsive browser interface passed a 390 × 844 viewport test. Authorization and transaction behavior have automated coverage. The original sub-300 ms latency objective has not been load-tested. A single MongoDB replica-set member supports transactions but offers no node-failure tolerance. Horizontal scaling and sharding remain future work.')
+p('The browser tests check the interface at 390 × 844 pixels, alongside the desktop flows. API tests check authorization and transaction behavior. The sub-300 ms latency target from Review 1 still needs a load test. Our local replica set has one MongoDB member, so it supports transactions but cannot tolerate the loss of that member. We have not implemented sharding or horizontal scaling.')
 h('Final changes after Review 2')
-p('The development proxy now follows the configured API port. Database Studio no longer marks a hidden conversation as read. Dialogs support focus trapping and Escape. React supporting components have separate files, the source has consistent formatting, the test suite covers additional authorization and concurrency cases, and GitHub Actions runs the verification workflow.')
+p('We corrected the development proxy to use the configured API port. We also fixed a receipt bug: opening Database Studio could mark messages in the selected conversation as read even though the chat was hidden. A browser test now checks this case. Dialogs support Tab navigation and Escape, and the supporting React components have separate files. The repository includes a GitHub Actions workflow for the verification commands.')
 
 page('2 Collections relationships and indexes')
 table(['Collection','Document shape and rationale'],[
@@ -74,7 +74,7 @@ table(['Collection','Document shape and rationale'],[
 ['conversations','type, title, ownerId, participants[], directKey and lastMessage. Participant ObjectIds form a bounded embedded membership array. Shared users remain referenced documents.'],
 ['messages','conversationId, senderId, text, optional attachment, deliveredTo[], readBy[], status and editedAt. Each message has timestamps and belongs to one conversation.']])
 h('Conceptual relationships')
-p('A user participates in many conversations, and a conversation has many users. The conceptual junction entity becomes the participants array. A conversation has many messages, and each message references one sender. Mongoose refs enable population but do not act as database-enforced foreign keys. Routes and transactions enforce membership and cleanup.')
+p('A user can join several conversations, and each conversation can contain several users. We represent that many-to-many relationship with participant IDs inside the conversation. Each message refers to one conversation and one sender. Mongoose can populate these references, but they are not database-enforced foreign keys. The API checks membership and handles related records when an account or conversation is deleted.')
 h('Index definitions')
 table(['Collection','Index','Query or constraint'],[
 ['users','username: 1; email: 1','Two unique indexes protect account identity.'],
@@ -83,11 +83,11 @@ table(['Collection','Index','Query or constraint'],[
 ['messages','conversationId: 1, createdAt: -1, _id: -1','Ordered history and stable cursor tie-breaking.'],
 ['messages','text: text','MongoDB text search scoped by conversation.']])
 h('Embedding and denormalization')
-p('Messages remain separate because history grows without a fixed bound and a BSON document has a 16 MB size limit. A small lastMessage snapshot avoids fetching message documents for each conversation preview. This repeats data deliberately; transactions maintain its consistency. The message text index is separate from the history index, so search has a different access pattern.')
+p('We keep messages outside the conversation document because history has no fixed upper bound. Embedding every message would eventually run into the 16 MB BSON document limit. The small lastMessage snapshot is a deliberate duplication: it lets the sidebar show a preview without fetching a message for every conversation. Transactions keep the two copies consistent. Text search uses its own index, separate from the ordered-history index.')
 
 page('3 Application architecture and CRUD')
 h('Runtime structure')
-p('One Node process serves the production React assets, Express API and Socket.IO transport. MongoDB runs in Docker on loopback port 27018 with replica set rs0. The browser communicates with the application on port 3100. During development, Vite proxies both API and socket traffic to the configured server port.')
+p('The production application runs in one Node process. It serves the built React files, the Express API and Socket.IO on port 3100. MongoDB runs in Docker on loopback port 27018 as replica set rs0. For development, Vite forwards API and socket requests to the server port set in the environment file.')
 table(['Layer','Code entry point','Responsibility'],[
 ['React','client/src/main.jsx','Chat state, fetch requests, socket listeners and UI updates.'],
 ['Components','client/src/components/','Authentication form, attachment form and Database Studio.'],
@@ -101,28 +101,28 @@ table(['Entity','Create and read','Update and delete'],[
 ['Conversation','Create direct/group; list by membership','Owner renames groups; creator deletes conversation and messages.'],
 ['Message','Send text/link; history and text search','Author edits/deletes; members acknowledge delivery/read.']])
 h('Authorization boundaries')
-p('JWT middleware resolves the current account. Conversation membership is checked independently for history, writes, typing and receipts. Owner checks protect conversation management; sender checks protect message edits and deletes. Inaccessible conversations return 404. Database Studio limits activity aggregation to the user’s conversations but intentionally exposes global collection counts and index definitions for evaluation.')
+p('A valid JWT identifies the account making a request. The API then checks whether that account belongs to the conversation. It checks the creator before allowing conversation management, and the sender before allowing a message edit or deletion. An inaccessible conversation returns 404. Database Studio shows activity only for conversations the user belongs to. Global collection counts and index definitions remain visible to logged-in users for the database review.')
 
 page('4 Transactions queries and consistency')
 h('Sending and changing messages')
-p('The send route validates content, then opens mongoose.connection.transaction. Within one session it checks membership, inserts the message and calls snapshot to update the conversation preview. It emits a Socket.IO event only after commit. Edits and deletes also recompute the newest preview within the transaction. If any operation fails, both collections retain their previous committed state.')
+p('Sending a message changes two documents: the message itself and the conversation preview. The route validates the content and starts mongoose.connection.transaction. It checks membership, inserts the message and calls snapshot using the same session. Only after commit does it emit the Socket.IO event. Edits and deletions also recalculate the preview inside a transaction. If one of these database operations fails, neither change commits.')
 h('Deletion behavior')
-p('Deleting a conversation removes its messages and the conversation in one transaction. Deleting an account removes its direct chats and owned groups. Other groups keep existing members, remove the deleted user’s messages and receipt references, recompute receipt status and refresh the cached preview. The account deletion endpoint requires the password again.')
+p('Conversation deletion removes the conversation and its messages in one transaction. Account deletion is broader. It removes direct chats and groups owned by that account. In other groups, it removes the account’s membership, messages and receipt references, then recalculates receipt status and the preview. The user must enter the password again before deleting the account.')
 h('Stable history pagination')
-p('A cursor contains the last returned timestamp and message ID. The next page matches earlier timestamps, or the same timestamp with a lower ObjectId. The query sorts by createdAt descending and _id descending and fetches limit plus one rows. The extra row determines whether a next cursor is needed. This avoids omissions when messages share a timestamp. The default page contains 30 records, with a maximum of 100.')
+p('History pagination uses both the timestamp and message ID. A timestamp alone would skip records when several messages share the same time. The next page therefore selects earlier timestamps, or the same timestamp with a lower ObjectId. The query sorts by createdAt and _id in descending order and fetches one extra row to check whether another page exists. The default page size is 30, with a maximum of 100.')
 h('Aggregation examples')
 table(['Result','Pipeline behavior'],[
 ['Unread counts','$match limits messages to member conversations, excludes the sender and already-read messages; $group counts by conversationId.'],
 ['Conversation activity','$group counts messages and characters; $lookup resolves the title; $project selects fields; $sort orders volume.'],
 ['Daily volume and statuses','$facet computes multiple summaries from the same filtered input. $dateToString groups dates by day.'],
 ['Query-plan inspection','explain with executionStats reports the winning plan, keys/documents examined and returned records. The integration test verifies IXSCAN.']])
-p('The rollback test deliberately throws after changing both collections and asserts that neither write survives. The pagination test inserts 65 messages with tied timestamps and asserts that traversal has no duplicates or missing records.')
+p('The rollback test throws an error after writing to both collections, then checks that neither write remains. The pagination test inserts 65 messages with the same timestamp and checks every page for duplicate or missing IDs.')
 
 page('5 Real time behavior and security')
 h('Event lifecycle')
-p('Socket.IO verifies the handshake token and checks that the user still exists. The server joins the connection to a user-specific room. API handlers publish message events to participant rooms after persistence. Typing checks membership before notifying peers. Expiry timers disconnect sockets when their token expires.')
+p('Socket.IO verifies the token during the connection handshake and checks that the account still exists. The server places the connection in a room for that user. After a message commits, the API sends an event to the participants’ rooms. Typing events also require a membership check. A timer disconnects each socket when its token expires.')
 h('Presence and receipts')
-p('An in-memory map counts connections for each user. Closing one tab keeps the user online while another tab remains. The final disconnect writes offline status and lastSeen. Receipt updates use set union to avoid duplicate IDs, then check whether the participant set is contained in readBy or deliveredTo. A read acknowledgement implies delivery. A visible chat can acknowledge reading; a hidden tab or the Database Studio view cannot.')
+p('The server counts open socket connections for each user. Closing one browser tab does not mark the user offline if another connection remains. The last disconnect updates status and lastSeen. Receipts use set union to avoid duplicate user IDs, then compare the participant list with readBy and deliveredTo. Read implies delivered. The client acknowledges reading only when the chat is visible, not while the tab is hidden or Database Studio is open.')
 h('Controls and boundaries')
 table(['Control','Implementation and qualification'],[
 ['Password storage','Bcrypt with cost 12. Hashes are not returned in public account objects.'],
@@ -132,27 +132,27 @@ table(['Control','Implementation and qualification'],[
 ['Session handling','One-day signed JWT in sessionStorage. Logout removes the local token, but there is no server-side revocation list.'],
 ['Frontend rendering','React escapes text. Attachment links open with noopener and noreferrer. Links are external resources, not server-side uploads.']])
 h('Production limitations')
-p('This version runs one application process and one MongoDB member. Socket events are transient and not replayed, while reconnect refresh recovers persisted history. It does not provide end-to-end encryption, password recovery, calls, file storage or multi-region deployment. Internet deployment needs HTTPS, removal of demo accounts, restricted database diagnostics, backups and operational monitoring.')
+p('The local setup has one application process and one MongoDB member. Socket events are not replayed after a disconnect, so the client reloads stored history when it reconnects. End-to-end encryption, password recovery, calls, file storage and multi-region deployment are outside this version. Before exposing the app on the internet, we would need HTTPS, restricted database diagnostics, backups and monitoring, and would need to remove the demo accounts.')
 
 page('6 Implemented user interface')
-p('The React interface combines a conversation sidebar, searchable history, editable messages and a message composer. Direct and group conversations use the same message model. The current desktop capture below comes from the running implementation.')
+p('The React screen has a conversation list on the left and message history on the right. Users can search the open conversation, edit their own messages and send text or attachment links from the composer. Direct and group chats use the same message model. Figure 1 shows the running application.')
 doc.add_picture(str(ROOT/'docs/screenshots/chat.png'),width=Inches(6.7))
 p('Figure 1  Conversation interface with membership, history, receipts and message actions.')
 h('Browser verification')
-p('Two isolated browser contexts log in as different demo users and exchange a live message. The test edits that message, checks the peer sees the update, searches the conversation, deletes the message and verifies its removal from the peer. Separate tests verify the mobile layout, keyboard dialog behavior and the hidden-conversation receipt regression.')
+p('The live-message test signs in as two demo users in separate browser contexts. One user sends a message, edits it and searches for it. The test checks that the second user sees the changes, then verifies that deleting the message removes it from the other screen. The remaining browser tests cover mobile layout, keyboard access to dialogs and the hidden-chat receipt bug.')
 h('Usability decisions')
-p('The UI displays connection state and request errors, prevents duplicate send clicks, ignores stale message-history responses after navigation, and expires typing indicators. Supporting React components separate authentication, attachment entry and database inspection from the chat screen. The source is formatted for direct code review.')
+p('The interface shows connection state and request errors. It disables repeated send clicks while a request is pending and ignores old history responses after the user switches conversations. Typing indicators expire automatically. Authentication, attachment entry and Database Studio have separate React components so their code is easier to inspect.')
 
 page('7 Database evidence and sample data')
 doc.add_picture(str(ROOT/'docs/screenshots/database.png'),width=Inches(6.7))
 p('Figure 2  Database Studio showing live collection counts, activity summaries, indexes and query inspection.')
 h('Seed dataset')
-p('On an empty database, the transactional seed creates 12 synthetic users, 6 conversations and 120 messages: 138 documents. Three conversations are groups and three are direct chats, with 20 messages each. Re-running the seed preserves existing data. Live counts can change after demonstrations; the automated seed test checks the exact baseline in an isolated database.')
-h('Evidence interpretation')
-p('Database Studio presents membership-scoped activity alongside global counts. The winning query plan and execution statistics are generated from the running database. Index use is demonstrated for the selected history query; it is not a blanket performance guarantee. The one-member rs0 configuration demonstrates transaction support rather than high availability.')
-p('The seed has fewer messages per conversation than the default 30-message page. To demonstrate pagination in the UI, add at least 11 messages to a seeded conversation. The automated pagination test already exercises multiple pages with tied timestamps.')
+p('On an empty database, the seed script creates 12 synthetic users, 6 conversations and 120 messages in one transaction. That gives 138 documents. There are three groups and three direct chats, each with 20 messages. Running the script again leaves existing data alone. The seed test checks these exact counts in an isolated database, since the counts in the demo app can change during use.')
+h('Reading the database results')
+p('Database Studio reads the query plan and execution statistics from the running database. The activity summaries include only the user’s conversations, while the collection counts are global. An IXSCAN shows that the selected query used an index. It does not establish the performance of every query. Likewise, rs0 confirms the replica-set configuration, but one member provides no failover.')
+p('Each seeded conversation has 20 messages, fewer than the default page size of 30. A UI pagination demonstration needs at least 11 more messages in one conversation. The automated test already checks multiple pages, including messages with tied timestamps.')
 
-page('8 Validation deployment and conclusion')
+page('8 Testing and running the project')
 table(['Check','Observed final result'],[
 ['npm run build','Production React bundle built successfully.'],
 ['npm run format:check','All checked source files passed.'],
@@ -160,18 +160,18 @@ table(['Check','Observed final result'],[
 ['npm run test:ui','4 passing browser tests, 0 failures using system Chrome.'],
 ['npm audit','0 known vulnerabilities after the compatible dependency update.']])
 h('Test coverage')
-p('The API suite covers seeding, hashing, authentication, authorization, direct-chat de-duplication, message CRUD, receipts, stable pagination, group permissions, transaction rollback, scoped aggregation, index use, sockets, typing, multi-tab presence, account deletion, concurrent creation and input rejection. Browser tests cover the user-facing flows described on page 7. These tests establish functional evidence; they do not replace load, failover or penetration testing.')
+p('The API tests check account and message operations, membership and ownership restrictions, receipt updates and account cleanup. They also check the database cases that are easy to miss in a manual demo: concurrent direct-chat creation, tied timestamps, rollback after a failed transaction and index selection. Socket tests cover live delivery, typing and presence across tabs. These checks do not measure load capacity or test failover, and they are not a penetration test.')
 h('Reproduction')
-p('Install Node.js 22.12 or later and Docker Compose. Run npm ci, npm run setup, then npm start. Open http://localhost:3100. Setup creates a random local JWT secret, starts MongoDB, seeds only an empty database and builds React. For two-user demonstrations, use tijil@vitstudent.ac.in and aria@vitstudent.ac.in in separate browser sessions with the synthetic demo password PingRoom@123.')
-h('Conclusion and next phase')
-p('PingRoom completes the reviewed local text-chat scope with a working React application and demonstrable MongoDB design. The strongest database evidence is the combination of unique and compound indexes, membership-scoped aggregation, stable history cursors and transactionally maintained previews. A future production phase would add a multi-member replica set, shared presence infrastructure, operational monitoring, load benchmarks and managed file storage.')
-h('Source and evidence register')
-p('Project sources: server/models.js, server/app.js, server/realtime.js, client/src/main.jsx, scripts/seed.js and tests/. Earlier submissions: PingRoom Review 1 MERN ChatApp and PingRoom Review 2 Database Implementation, supplied PDFs. Final verification and screenshots were produced from the local implementation on 19 October 2026. Repository: https://github.com/TijilSharma/PingRoom.')
+p('To run the project, install Node.js 22.12 or later and Docker Compose, then run npm ci, npm run setup and npm start. Open http://localhost:3100. Setup generates a local JWT secret, starts MongoDB, seeds an empty database and builds React. For a two-user demo, sign in as tijil@vitstudent.ac.in and aria@vitstudent.ac.in in separate browser sessions. Both synthetic accounts use PingRoom@123.')
+h('Work required for deployment')
+p('A production deployment would need a multi-member replica set and shared presence state before adding more application servers. Load tests would be needed to assess the original latency target. File uploads would also require storage and access controls beyond the HTTP(S) links supported here.')
+h('References')
+p('Implementation references: server/models.js, server/app.js, server/realtime.js, client/src/main.jsx, scripts/seed.js and tests/. Earlier submissions: PingRoom Review 1 MERN ChatApp and PingRoom Review 2 Database Implementation. The verification results and screenshots in this report come from the local application on 19 October 2026. Repository: https://github.com/TijilSharma/PingRoom.')
 (ROOT/'output').mkdir(exist_ok=True)
 for element in list(doc.styles.element.iter()) + list(doc.element.iter()):
     for border in list(element.findall(qn('w:pBdr'))): element.remove(border)
 doc.styles['Caption'].font.color.rgb=RGBColor.from_string('64756B')
-doc.core_properties.author='Tijil Sharma'
+doc.core_properties.author='Tijil Sharma, Riya Chopra and Vidhanshu Bhardwaj'
 doc.core_properties.title='PingRoom Final Implementation Review'
 doc.save(ROOT/'output/PingRoom_Final_Review.docx')
 print('Created final review document')
