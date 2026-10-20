@@ -14,13 +14,22 @@ npm run setup
 npm start
 ```
 
-Open **http://localhost:3100**. Setup generates a random JWT secret in a local `.env`, starts MongoDB as replica set `rs0`, seeds an empty database, and builds React. Existing data is preserved.
+Open **http://localhost:3100**. Setup generates a random JWT secret in a local `.env`, starts MongoDB as replica set `rs0` and Redis, seeds an empty database, and builds React. Existing data is preserved. Existing `.env` files receive a local `REDIS_URL` if they do not already have one.
+
+To inspect the MongoDB data directly:
+
+```bash
+docker exec -it pingroom-mongo mongosh pingroom
+```
+
+In `mongosh`, use `show collections`, `db.users.find({}, { username: 1, email: 1, status: 1 }).limit(3).pretty()`, or `db.messages.countDocuments()`. The field projection keeps password hashes out of this example. Run `exit` to leave the shell. Redis holds API rate-limit counters; chat records remain in MongoDB.
 
 Demo accounts: `tijil@vitstudent.ac.in` and `aria@vitstudent.ac.in`, both using `PingRoom@123`. Use separate browser profiles or an incognito window for two users. These are synthetic demonstration accounts, not real credentials.
 
 ## Features
 
 - Registration and login, bcrypt password hashing, expiring JWTs, profile updates and password-confirmed account deletion.
+- Redis-backed API and authentication rate limits shared across server instances.
 - Direct conversations with a unique pair key, groups of 3–50 participants, owner-only rename and deletion.
 - Persistent text messages, HTTP(S) attachment links, author-only edit/delete and conversation search.
 - Socket.IO message events, typing and online presence, including multiple tabs.
@@ -50,11 +59,12 @@ Run `npm run dev:server` in one terminal and `npm run dev` in another. Vite prox
 | Setting | Purpose |
 | --- | --- |
 | `MONGODB_URI` | Replica-set connection string; local default is in `.env.example` |
+| `REDIS_URL` | Redis connection for rate limits; local default is `redis://127.0.0.1:6380` |
 | `JWT_SECRET` | Random secret of at least 32 characters; never commit `.env` |
 | `PORT` | API and production frontend port, default 3100 |
 | `HOST` | Listening interface, default loopback |
 
-`npm run db:stop` stops MongoDB without deleting the Docker volume. `npm run db:up` starts it again. Do not remove the volume before the demonstration.
+`npm run db:stop` stops MongoDB and Redis without deleting the MongoDB volume. `npm run db:up` starts them again. Do not remove the volume before the demonstration. The API requires Redis to be available at startup; rate-limit counters expire automatically after their one-minute window.
 
 ## Project map
 

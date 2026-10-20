@@ -27,7 +27,7 @@ The seed has 20 messages per conversation and the UI page size is 30. To demonst
 
 ## If something fails
 
-- Database connection error: `docker compose ps`, then `npm run db:up`.
+- MongoDB or Redis connection error: `docker compose ps`, then `npm run db:up`.
 - Port busy: close the previous server, or change PORT and restart. Browser tests expect 3100.
 - Empty/missing frontend: `npm run build`, then refresh.
 - Login expiry: sign in again. JWT lifetime is one day.

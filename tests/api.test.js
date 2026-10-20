@@ -5,19 +5,26 @@ import mongoose from 'mongoose';
 import request from 'supertest';
 import { createServer } from 'node:http';
 import { io as client } from 'socket.io-client';
+import { createClient } from 'redis';
 import { connect, User, Conversation, Message } from '../server/models.js';
 import { makeApp } from '../server/app.js';
 import { realtime } from '../server/realtime.js';
 import { seed } from '../scripts/seed.js';
-let app, server, io, base, a, b, c, conv;
+let app, server, io, redis, base, a, b, c, conv;
 const secret = 'test-secret-is-long-enough-for-integration-tests';
 const auth = (method, url, who = a) =>
   request(app)[method](url).set('Authorization', `Bearer ${who.token}`);
 before(async () => {
+  redis = createClient({
+    url: process.env.REDIS_URL || 'redis://127.0.0.1:6380',
+    socket: { reconnectStrategy: false },
+  });
+  redis.on('error', (error) => console.error('Redis test client:', error));
+  await redis.connect();
   const uri = new URL(process.env.MONGODB_URI);
   uri.pathname = `/pingroom_test_${Date.now()}`;
   await connect(uri.toString());
-  app = makeApp(secret);
+  app = makeApp(secret, redis, `pingroom:test:${Date.now()}:`);
   server = createServer(app);
   io = realtime(server, app, secret);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -27,6 +34,7 @@ after(async () => {
   await mongoose.connection.dropDatabase();
   await new Promise((r) => io.close(r));
   await mongoose.disconnect();
+  await redis.close();
 });
 test('seed creates 138 valid documents and is non-destructive when repeated', async () => {
   await seed();
@@ -419,4 +427,15 @@ test('API rejects object injection, oversize content and unknown routes', async 
     .send({ text: 'x'.repeat(4001) })
     .expect(400);
   await auth('get', '/api/unknown').expect(404);
+});
+
+test('auth rate limit stores its counter in Redis and rejects the 31st request', async () => {
+  const prefix = `pingroom:limit-test:${Date.now()}:${process.pid}:`;
+  const limited = makeApp(secret, redis, prefix);
+  for (let n = 0; n < 30; n++)
+    await request(limited).post('/api/auth/login').send({}).expect(400);
+  await request(limited).post('/api/auth/login').send({}).expect(429);
+  const keys = await redis.keys(`${prefix}auth:*`);
+  assert.equal(keys.length, 1);
+  assert.ok((await redis.pTTL(keys[0])) > 0);
 });

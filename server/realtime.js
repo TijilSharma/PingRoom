@@ -1,10 +1,12 @@
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { User, Conversation } from './models.js';
+// Attach authenticated Socket.IO connections to the HTTP server.
 export function realtime(server, app, secret) {
   const io = new Server(server, { maxHttpBufferSize: 32768 });
   app.set('io', io);
   const sockets = new Map();
+  // Reject sockets without a valid JWT or an existing account.
   io.use(async (socket, next) => {
     try {
       const payload = jwt.verify(socket.handshake.auth.token || '', secret);
@@ -17,6 +19,7 @@ export function realtime(server, app, secret) {
       next(new Error('Unauthorized'));
     }
   });
+  // Persist presence and tell users who share a conversation with this user.
   const publishPresence = async (uid, status) => {
     await User.updateOne({ _id: uid }, { status, lastSeen: new Date() });
     const convs = await Conversation.find({ participants: uid });
@@ -24,6 +27,7 @@ export function realtime(server, app, secret) {
     for (const peer of peers)
       io.to(`user:${peer}`).emit('presence', { userId: uid, status });
   };
+  // Count tabs per account so one closed tab does not mark the user offline.
   io.on('connection', (socket) => {
     const uid = socket.data.uid;
     socket.join(`user:${uid}`);
@@ -34,6 +38,7 @@ export function realtime(server, app, secret) {
       Math.max(0, socket.data.expires * 1000 - Date.now()),
     );
     let lastTyping = 0;
+    // Forward throttled typing signals only to members of that conversation.
     socket.on('typing', async (payload) => {
       if (
         !payload ||
@@ -59,6 +64,7 @@ export function realtime(server, app, secret) {
         console.error(e);
       }
     });
+    // Publish offline status when the account's final socket disconnects.
     socket.on('disconnect', () => {
       clearTimeout(timer);
       const count = (sockets.get(uid) || 1) - 1;

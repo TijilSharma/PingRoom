@@ -29,7 +29,8 @@ A Socket.IO event is not the database write. If publication is interrupted after
 - `oid`: explicitly creates an ObjectId for aggregation/update pipelines, where automatic Mongoose casting cannot be assumed.
 - `fail`: throws an Error with an HTTP status for the final error handler.
 - `publicUser`: returns a safe account projection without the password hash.
-- `makeApp(secret)`: builds the Express application, allowing tests to use the same routes without starting the production server.
+- `makeApp(secret, redis, rateLimitPrefix?)`: builds the Express application with a connected Redis client. The optional prefix isolates test counters.
+- `limiter(limit, prefix)`: creates a Redis-backed one-minute rate limiter. Separate key prefixes keep the 500-request API limit and 30-request auth limit independent.
 - `sign`: creates a signed token with subject = user ID and a one-day expiry. A JWT is signed, not encrypted.
 - `member(cid, uid, session)`: combines document lookup and authorization. A non-member receives 404, avoiding disclosure of conversation existence.
 - `snapshot(conv, session)`: recomputes the preview after insert/edit/delete. Recomputing matters when the latest message is deleted.

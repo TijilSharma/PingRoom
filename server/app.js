@@ -1,6 +1,7 @@
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
@@ -28,10 +29,13 @@ const content = z
     attachment: attachment.optional(),
   })
   .refine((v) => v.text || v.attachment, 'Write a message or attach a link');
+// Convert a validated ID string into a MongoDB ObjectId for query filters.
 const oid = (s) => new mongoose.Types.ObjectId(s);
+// Throw an HTTP error for the shared error handler at the bottom of this file.
 const fail = (status, message) => {
   throw Object.assign(new Error(message), { status });
 };
+// Return only profile fields that are safe to expose to the browser.
 export const publicUser = (u) => ({
   _id: u._id,
   username: u.username,
@@ -40,17 +44,33 @@ export const publicUser = (u) => ({
   status: u.status,
   lastSeen: u.lastSeen,
 });
-export function makeApp(secret) {
+// Assemble API routes with Redis-backed limits shared by all Node instances.
+export function makeApp(secret, redis, rateLimitPrefix = 'pingroom:limit:') {
+  if (!redis?.isReady)
+    throw Error('Redis must be connected before creating the API');
   const app = express();
   app.use(helmet());
   app.use(express.json({ limit: '32kb' }));
-  app.use('/api', rateLimit({ windowMs: 60_000, limit: 500 }));
+  // Each limiter needs its own store and key prefix to keep counters separate.
+  const limiter = (limit, prefix) =>
+    rateLimit({
+      windowMs: 60_000,
+      limit,
+      store: new RedisStore({
+        sendCommand: (...args) => redis.sendCommand(args),
+        prefix: `${rateLimitPrefix}${prefix}:`,
+      }),
+    });
+  app.use('/api', limiter(500, 'api'));
+  // Sign a one-day token with the user's ID as its subject.
   const sign = (u) =>
     jwt.sign({ sub: String(u._id) }, secret, { expiresIn: '1d' });
+  // Expose MongoDB connection state for a simple local health check.
   app.get('/api/health', (req, res) =>
     res.json({ ok: mongoose.connection.readyState === 1 }),
   );
-  app.use('/api/auth', rateLimit({ windowMs: 60_000, limit: 30 }));
+  app.use('/api/auth', limiter(30, 'auth'));
+  // Create an account with a bcrypt hash and return a public profile and token.
   app.post('/api/auth/register', async (req, res) => {
     const v = credentials.extend({ username }).parse(req.body);
     const u = await User.create({
@@ -60,6 +80,7 @@ export function makeApp(secret) {
     });
     res.status(201).json({ token: sign(u), user: publicUser(u) });
   });
+  // Compare the supplied password with the stored hash before issuing a token.
   app.post('/api/auth/login', async (req, res) => {
     const v = credentials.parse(req.body);
     const u = await User.findOne({ email: v.email }).select('+passwordHash');
@@ -67,6 +88,7 @@ export function makeApp(secret) {
       fail(401, 'Invalid email or password');
     res.json({ token: sign(u), user: publicUser(u) });
   });
+  // Authenticate remaining API routes and load the user named by the JWT.
   app.use('/api', async (req, res, next) => {
     try {
       const payload = jwt.verify(
@@ -81,11 +103,13 @@ export function makeApp(secret) {
       return res.status(401).json({ error: 'Account no longer exists' });
     next();
   });
+  // Notify every participant's Socket.IO room about a committed change.
   const emit = (conv, event, data) => {
     for (const p of conv.participants)
       app.get('io')?.to(`user:${p}`).emit(event, data);
   };
   app.set('notify', emit);
+  // Fetch a conversation only when the user belongs to it.
   async function member(cid, uid, session) {
     id.parse(cid);
     const conv = await Conversation.findOne({
@@ -95,6 +119,7 @@ export function makeApp(secret) {
     if (!conv) fail(404, 'Conversation not found');
     return conv;
   }
+  // Refresh the cached latest-message preview within the current transaction.
   async function snapshot(conv, session) {
     const last = await Message.findOne({ conversationId: conv._id })
       .sort({ createdAt: -1, _id: -1 })
@@ -108,13 +133,16 @@ export function makeApp(secret) {
       : undefined;
     await conv.save({ session });
   }
+  // Return the current user's public profile.
   app.get('/api/me', (req, res) => res.json(publicUser(req.user)));
+  // Validate and save a changed username.
   app.patch('/api/me', async (req, res) => {
     const v = z.object({ username }).parse(req.body);
     req.user.username = v.username;
     await req.user.save();
     res.json(publicUser(req.user));
   });
+  // Verify the password and remove or update related records in one transaction.
   app.delete('/api/me', async (req, res) => {
     const { password } = z
       .object({ password: z.string().min(1).max(72) })
@@ -176,6 +204,7 @@ export function makeApp(secret) {
     app.get('io')?.in(`user:${req.user._id}`).disconnectSockets(true);
     res.json({ deleted: true });
   });
+  // Search other users by a safely escaped username fragment.
   app.get('/api/users', async (req, res) => {
     const q = z
       .string()
@@ -191,6 +220,7 @@ export function makeApp(secret) {
         .limit(50),
     );
   });
+  // List the user's conversations with participant details and unread counts.
   app.get('/api/conversations', async (req, res) => {
     const conversations = await Conversation.find({
       participants: req.user._id,
@@ -215,6 +245,7 @@ export function makeApp(secret) {
       })),
     );
   });
+  // Create a group or reuse the unique direct chat for a pair of users.
   app.post('/api/conversations', async (req, res) => {
     const v = z
       .object({
@@ -265,6 +296,7 @@ export function makeApp(secret) {
     emit(conv, 'conversations:changed', {});
     res.status(201).json(conv);
   });
+  // Allow a group creator to rename their group.
   app.patch('/api/conversations/:cid', async (req, res) => {
     const v = z
       .object({ title: z.string().trim().min(1).max(80) })
@@ -277,6 +309,7 @@ export function makeApp(secret) {
     emit(conv, 'conversations:changed', {});
     res.json(conv);
   });
+  // Delete a creator-owned conversation and its messages atomically.
   app.delete('/api/conversations/:cid', async (req, res) => {
     let conv;
     await mongoose.connection.transaction(async (session) => {
@@ -289,6 +322,7 @@ export function makeApp(secret) {
     emit(conv, 'conversations:changed', {});
     res.json({ deleted: true });
   });
+  // Return a page of history, using time and ID to make cursor ordering stable.
   app.get('/api/conversations/:cid/messages', async (req, res) => {
     await member(req.params.cid, req.user._id);
     const v = z
@@ -330,6 +364,7 @@ export function makeApp(secret) {
         : null,
     });
   });
+  // Save a message and its conversation preview, then broadcast after commit.
   app.post('/api/conversations/:cid/messages', async (req, res) => {
     const v = content.parse(req.body);
     let message, conv;
@@ -353,6 +388,7 @@ export function makeApp(secret) {
     emit(conv, 'message:new', message);
     res.status(201).json(message);
   });
+  // Let the sender edit content and refresh the latest-message preview.
   app.patch('/api/messages/:mid', async (req, res) => {
     id.parse(req.params.mid);
     const v = content.parse(req.body);
@@ -377,6 +413,7 @@ export function makeApp(secret) {
     emit(conv, 'message:changed', message);
     res.json(message);
   });
+  // Let the sender delete a message and recalculate the conversation preview.
   app.delete('/api/messages/:mid', async (req, res) => {
     id.parse(req.params.mid);
     let conv;
@@ -399,6 +436,7 @@ export function makeApp(secret) {
     });
     res.json({ deleted: true });
   });
+  // Add delivery or read acknowledgements and recalculate each message status.
   app.post('/api/conversations/:cid/receipts', async (req, res) => {
     const { status, messageIds } = z
       .object({
@@ -443,6 +481,7 @@ export function makeApp(secret) {
     emit(conv, 'receipts:changed', { conversationId: conv._id });
     res.json({ ok: true });
   });
+  // Show scoped message aggregates plus live index and query-plan information.
   app.get('/api/database', async (req, res) => {
     const convs = await Conversation.find({
       participants: req.user._id,
@@ -523,9 +562,11 @@ export function makeApp(secret) {
         : null,
     });
   });
+  // Return a JSON 404 for unknown API routes before the React fallback.
   app.use('/api', (req, res) =>
     res.status(404).json({ error: 'Endpoint not found' }),
   );
+  // Convert validation, duplicate-key and application errors into HTTP responses.
   app.use((err, req, res, next) => {
     if (err instanceof z.ZodError)
       return res

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 const { Schema, model } = mongoose;
+// Define an ObjectId field that Mongoose can populate from another collection.
 const ref = (model) => ({ type: Schema.Types.ObjectId, ref: model });
 const userSchema = new Schema(
   {
@@ -60,6 +61,7 @@ messageSchema.index({ text: 'text' });
 export const User = model('User', userSchema);
 export const Conversation = model('Conversation', conversationSchema);
 export const Message = model('Message', messageSchema);
+// Connect to MongoDB and wait for model indexes before the API starts.
 export async function connect(uri) {
   await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
   await Promise.all([User.init(), Conversation.init(), Message.init()]);
